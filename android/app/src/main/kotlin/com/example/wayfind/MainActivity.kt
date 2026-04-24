@@ -39,7 +39,8 @@ import java.util.Locale
  *   Flutter→Kotlin : startScanning, stopScanning, checkPermissions,
  *                    requestPermissions, getLogPath, clearLogs,
  *                    startSurvey(zoneName), stopSurvey, cancelSurvey,
- *                    getSurveyedZones, deleteZone(zoneName), clearSurveys
+ *                    getSurveyedZones, deleteZone(zoneName), clearSurveys,
+ *                    setNavConstraint(currentZone, nextZone), clearNavConstraint
  *   Kotlin→Flutter : onZoneData(jsonString), onSurveyTick(Int),
  *                    onPermissionResult(Boolean)
  */
@@ -84,7 +85,8 @@ class MainActivity : FlutterActivity(), SensorEventListener {
 
     // ── Coroutine scope ───────────────────────────────────────────────────────
     private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-
+    // Add this line
+    private var pendingNavConstraint: Pair<String, String>? = null
     // ═════════════════════════════════════════════════════════════════════════
     // BLE service connection
     // ═════════════════════════════════════════════════════════════════════════
@@ -96,6 +98,12 @@ class MainActivity : FlutterActivity(), SensorEventListener {
             serviceBound = true
 
             bleService?.surveyManager = surveyManager
+
+            pendingNavConstraint?.let {
+                bleService?.setNavigationConstraint(it.first, it.second)
+                pendingNavConstraint = null
+                Log.d(TAG, "Applied pending nav constraint: ${it.first} → ${it.second}")
+            }
             reloadFingerprints()
 
             bleService?.onZoneDetected = { zoneResult ->
@@ -200,9 +208,17 @@ class MainActivity : FlutterActivity(), SensorEventListener {
                 }
                 "stopSurvey" -> {
                     bleService?.surveyMode = false
-                    val fingerprint = surveyManager.stopSurvey()
+                    val sampleCount = surveyManager.sampleCount()
+                    val surveyResult = surveyManager.stopSurvey()
+                    if (surveyResult != null) {
+                        loggingManager.logSurveyFingerprint(
+                            fingerprint = surveyResult.fingerprint,
+                            sampleCount = sampleCount,
+                            rawSamples  = surveyResult.rawSamples
+                        )
+                    }
                     reloadFingerprints()
-                    result.success(fingerprint?.zoneName)
+                    result.success(surveyResult?.fingerprint?.zoneName)
                 }
                 "cancelSurvey" -> {
                     bleService?.surveyMode = false
@@ -219,6 +235,28 @@ class MainActivity : FlutterActivity(), SensorEventListener {
                     result.success(surveyManager.deleteFingerprint(zoneName))
                 }
                 "clearSurveys" -> result.success(surveyManager.clearAllPersisted())
+
+                "setNavConstraint" -> {
+                    val currentZone = call.argument<String>("currentZone") ?: ""
+                    val nextZone    = call.argument<String>("nextZone")    ?: ""
+                    if (currentZone.isBlank() || nextZone.isBlank()) {
+                        result.error("INVALID_ARGS", "currentZone and nextZone must not be empty", null)
+                    } else {
+                        if (bleService != null) {
+                            bleService?.setNavigationConstraint(currentZone, nextZone)
+                        } else {
+                            // Service not bound yet — store it, will be applied in onServiceConnected
+                            pendingNavConstraint = Pair(currentZone, nextZone)
+                            Log.d(TAG, "Service not bound yet, queuing constraint: $currentZone → $nextZone")
+                        }
+                        result.success(true)
+                    }
+                }
+                "clearNavConstraint" -> {
+                    pendingNavConstraint = null
+                    bleService?.clearNavigationConstraint()
+                    result.success(true)
+                }
 
                 else -> result.notImplemented()
             }

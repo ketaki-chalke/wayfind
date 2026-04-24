@@ -58,10 +58,25 @@ class SurveyManager(private val context: Context) {
     }
 
     /**
-     * Stop the survey, compute medians, persist the fingerprint, and return it.
+     * Holds everything produced by a completed survey session.
+     *
+     * @param fingerprint  The persisted fingerprint (median RSSI per beacon).
+     * @param rawSamples   Snapshot of the full sample buffer at the moment
+     *                     [stopSurvey] was called: beaconId -> all raw RSSI readings.
+     *                     Useful for logging and QA — lets you see the spread of
+     *                     values that were reduced to each median.
+     */
+    data class SurveyResult(
+        val fingerprint: Fingerprint,
+        val rawSamples:  Map<String, List<Int>>
+    )
+
+    /**
+     * Stop the survey, compute medians, persist the fingerprint, and return a
+     * [SurveyResult] containing both the fingerprint and the raw sample buffer.
      * Returns null if no samples were collected.
      */
-    fun stopSurvey(): Fingerprint? {
+    fun stopSurvey(): SurveyResult? {
         isSurveying = false
 
         if (sampleBuffer.isEmpty()) {
@@ -69,20 +84,24 @@ class SurveyManager(private val context: Context) {
             return null
         }
 
-        // Compute median RSSI per beacon
-        val rssiMap = sampleBuffer.mapValues { (_, samples) -> medianOf(samples) }
+        // Snapshot raw buffer BEFORE clearing (immutable copy for the caller)
+        val rawSnapshot: Map<String, List<Int>> = sampleBuffer.mapValues { (_, samples) ->
+            samples.toList()
+        }
+
+        // Compute median RSSI per beacon from the snapshot
+        val rssiMap = rawSnapshot.mapValues { (_, samples) -> medianOf(samples) }
 
         val fingerprint = Fingerprint(
             zoneName = currentZoneName,
             rssiMap  = rssiMap
         )
 
-        // Persist
         saveFingerprint(fingerprint)
 
         Log.d(TAG, "Survey complete: zone=$currentZoneName, beacons=${rssiMap.keys}")
         sampleBuffer.clear()
-        return fingerprint
+        return SurveyResult(fingerprint, rawSnapshot)
     }
 
     /** Discard current survey without saving. */

@@ -3,6 +3,7 @@ package com.example.wayfind
 import kotlin.math.pow
 import kotlin.math.sqrt
 import java.util.LinkedList
+import android.util.Log
 
 /**
  * Fingerprint record: one zone's radio map
@@ -43,8 +44,51 @@ class BleFingerprintMatcher(
 
         // Top-k closest
         val topK = distances.sortedBy { it.second }.take(k)
-
+        Log.w("BleFingerprintMatcher", "Normal predict done: $topK")
         // Majority vote
+        val bestZone = topK
+            .groupingBy { it.first }
+            .eachCount()
+            .maxByOrNull { it.value }
+            ?.key
+
+        return bestZone?.let { smoothPrediction(it) }
+    }
+
+    /**
+     * Constrained prediction: only compares fingerprints whose zone name is
+     * in [allowedZones].  Used during navigation to compare only the current
+     * zone and the next zone on the path, ignoring all others.
+     *
+     * Falls back to unconstrained [predict] if fewer than 2 allowed
+     * fingerprints are found in the database (safety net).
+     *
+     * @param currentScan   Map of beaconId -> median RSSI from sliding window
+     * @param allowedZones  Set of zone names to consider (typically 2)
+     * @return Smoothed zone name, or null if no match possible
+     */
+    fun predictConstrained(
+        currentScan: Map<String, Int>,
+        allowedZones: Set<String>
+    ): String? {
+        val subset = fingerprints.filter { it.zoneName in allowedZones }
+        // Fall back to full search if we don't have enough fingerprints for the
+        // requested zones (e.g. a zone was never surveyed)
+        if (subset.size < 2) {
+        Log.w("BleFingerprintMatcher",
+            "predictConstrained fallback! Found ${subset.size} of ${allowedZones.size} " +
+            "requested zones. Allowed=$allowedZones, " +
+            "DB zones=${fingerprints.map { it.zoneName }}")
+        return predict(currentScan)
+    }
+        if (currentScan.isEmpty()) return null
+
+        val distances = subset.map { fingerprint ->
+            fingerprint.zoneName to weightedDistance(currentScan, fingerprint.rssiMap)
+        }
+
+        val topK = distances.sortedBy { it.second }.take(k.coerceAtMost(subset.size))
+        Log.w("BleFingerprintMatcher", "Constrained predict done: $topK")
         val bestZone = topK
             .groupingBy { it.first }
             .eachCount()

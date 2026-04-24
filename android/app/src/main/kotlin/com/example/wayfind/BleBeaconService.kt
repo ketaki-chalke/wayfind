@@ -34,10 +34,10 @@ class BleBeaconService : Service() {
         const val TARGET_UUID = "e2c56db5dffb48d2b060d0f5a71096e0"
 
         /** How often to run the KNN prediction (ms) */
-        private const val SCAN_INTERVAL_MS = 2000L
+        private const val SCAN_INTERVAL_MS = 1000L
 
         /** Sliding window depth per beacon */
-        private const val WINDOW_SIZE = 15
+        private const val WINDOW_SIZE = 10
     }
 
     // ── Service plumbing ──────────────────────────────────────────────────────
@@ -76,6 +76,27 @@ class BleBeaconService : Service() {
 
     /** Injected by MainActivity after service binds */
     var surveyManager: SurveyManager? = null
+
+    /**
+     * Navigation constraint — when non-null, KNN is limited to these two zones.
+     * First = current zone the user should be at, second = next zone on the path.
+     */
+    private var navConstraint: Pair<String, String>? = null
+
+    /**
+     * Activate constrained matching for a navigation step.
+     * Only [currentZone] and [nextZone] fingerprints will be compared.
+     */
+    fun setNavigationConstraint(currentZone: String, nextZone: String) {
+        navConstraint = Pair(currentZone, nextZone)
+        Log.d(TAG, "Nav constraint set: $currentZone → $nextZone")
+    }
+
+    /** Remove the constraint — used when navigation ends or is cancelled. */
+    fun clearNavigationConstraint() {
+        navConstraint = null
+        Log.d(TAG, "Nav constraint cleared")
+    }
 
     // ── Binder ────────────────────────────────────────────────────────────────
 
@@ -211,7 +232,15 @@ class BleBeaconService : Service() {
             Log.d(TAG, "Survey tick: $count total samples")
         } else {
             // ── Positioning mode: run KNN ─────────────────────────────────────
-            val zoneName = matcher.predict(currentScan)
+            val constraint = navConstraint
+            val zoneName = if (constraint != null) {
+                matcher.predictConstrained(
+                    currentScan,
+                    setOf(constraint.first, constraint.second)
+                )
+            } else {
+                matcher.predict(currentScan)
+            }
 
             val result = ZoneResult(
                 zoneName    = zoneName ?: "Unknown",

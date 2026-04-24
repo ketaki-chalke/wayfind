@@ -507,25 +507,41 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   );
 
   void _showInfo() => showDialog(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const Text('About WayFind'),
-      content: const SingleChildScrollView(
-        child: Text(
-          'WayFind — Indoor Navigation + BLE Fingerprinting\n\n'
-          'Adding a Location:\n'
-          '1. Enter a name\n2. Select adjacent location and direction\n'
-          '3. Record BLE fingerprint (~30 s)\n\n'
-          'Navigation:\n'
-          '• Pick source and destination\n'
-          '• BLE scanning starts automatically\n'
-          '• App auto-advances when zone confirmed twice in a row\n'
-          '• Manual "I\'ve Arrived" always available',
-        ),
+  context: context,
+  builder: (_) => AlertDialog(
+    title: const Text('About WayFind'),
+    content: const SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'WayFind — Indoor Navigation + BLE Fingerprinting\n\n'
+            'Adding a Location:\n'
+            '1. Enter a name\n2. Select adjacent location and direction\n'
+            '3. Record BLE fingerprint (~30 s)\n\n'
+            'Navigation:\n'
+            '• Pick source and destination\n'
+            '• BLE scanning starts automatically\n'
+            '• App auto-advances when zone confirmed twice in a row\n'
+            '• Manual "I\'ve Arrived" always available',
+          ),
+          SizedBox(height: 20),
+          Divider(),
+          SizedBox(height: 8),
+          Text('Version', style: TextStyle(fontSize: 11, color: Colors.black45, letterSpacing: 0.8)),
+          SizedBox(height: 4),
+          Text('v1.0.0', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          SizedBox(height: 2),
+          Text('Nav constraint fix', style: TextStyle(fontSize: 12, color: Colors.black54)),
+          SizedBox(height: 2),
+          Text('2025-03-31', style: TextStyle(fontSize: 11, color: Colors.black38)),
+        ],
       ),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
     ),
-  );
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+  ),
+);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -992,6 +1008,8 @@ class _NavState extends State<NavigationScreen> {
       _updateTurn();
     });
     await _startBle();
+    // Constrain KNN to start zone and next zone only
+    if (path.length > 1) await _setNavConstraint(path[0], path[1]);
     _speak('Starting navigation. Head to ${path.length > 1 ? path[1] : path[0]}.');
   }
 
@@ -1014,15 +1032,39 @@ class _NavState extends State<NavigationScreen> {
       _advanceMsg = byBle ? '📍 BLE confirmed: "${_path![target]}"' : null;
       _updateTurn();
     });
+    // Keep KNN focused on the current zone vs the next zone only
+    if (!isLast) {
+      _setNavConstraint(_path![target], _path![target + 1]);
+    } else {
+      _clearNavConstraint(); // destination reached
+    }
     if (byBle) Future.delayed(const Duration(seconds: 4), () { if (mounted) setState(() => _advanceMsg = null); });
     if (isLast) { _speak('You have arrived at ${_path!.last}. Navigation complete.'); _stopBle(); }
     else _speak('Arrived. Now head to ${_path![target + 1]}.');
+  }
+
+  /// Tell Android to restrict KNN to [currentZone] and [nextZone] only.
+  Future<void> _setNavConstraint(String currentZone, String nextZone) async {
+    try {
+      await widget.bleChannel.invokeMethod('setNavConstraint', {
+        'currentZone': currentZone,
+        'nextZone': nextZone,
+      });
+    } catch (_) {}
+  }
+
+  /// Remove the KNN constraint (called when navigation ends or is cancelled).
+  Future<void> _clearNavConstraint() async {
+    try {
+      await widget.bleChannel.invokeMethod('clearNavConstraint');
+    } catch (_) {}
   }
 
   void _manualAdvance() => _goToStep(_step + 1);
 
   Future<void> _endNav() async {
     await _stopBle();
+    await _clearNavConstraint();
     setState(() {
       _path = null; _step = 0; _compassActive = false; _turnInst = '';
       _src = null; _dst = null; _advanceMsg = null;

@@ -64,6 +64,55 @@ class LoggingManager(private val context: Context) {
     /**
      * Log an error event.
      */
+    /**
+     * Log a completed survey fingerprint.
+     *
+     * Called by MainActivity after [SurveyManager.stopSurvey] returns a
+     * non-null [Fingerprint].  Records the zone name, number of beacons, and
+     * the full per-beacon median RSSI map that was persisted to disk.
+     *
+     * @param fingerprint  The fingerprint that was just saved
+     * @param sampleCount  Total raw RSSI samples collected during the survey
+     */
+    fun logSurveyFingerprint(
+        fingerprint: Fingerprint,
+        sampleCount: Int,
+        rawSamples:  Map<String, List<Int>> = emptyMap()
+    ) {
+        try {
+            val timestamp = dateFormat.format(Date())
+            val sb = StringBuilder()
+
+            sb.append("=".repeat(70)).append("\n")
+            sb.append("[$timestamp] SURVEY FINGERPRINT SAVED\n")
+            sb.append("=".repeat(70)).append("\n")
+            sb.append("Zone Name     : ${fingerprint.zoneName}\n")
+            sb.append("Beacons seen  : ${fingerprint.rssiMap.size}\n")
+            sb.append("Total samples : $sampleCount\n")
+
+            sb.append("\nMedian RSSI per beacon:\n")
+            for ((beaconId, rssi) in fingerprint.rssiMap.entries.sortedBy { it.key }) {
+                sb.append("  $beaconId → $rssi dBm\n")
+            }
+
+            if (rawSamples.isNotEmpty()) {
+                sb.append("\nRaw sample buffer:\n")
+                for ((beaconId, samples) in rawSamples.entries.sortedBy { it.key }) {
+                    sb.append("  $beaconId (${samples.size}): [${samples.joinToString(", ")}]\n")
+                }
+            }
+
+            sb.append("=".repeat(70)).append("\n\n")
+
+            appendToFile(sb.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error writing survey fingerprint log: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Log an error event.
+     */
     fun logError(errorMessage: String, processingTimeMs: Double) {
         try {
             val timestamp = dateFormat.format(Date())
